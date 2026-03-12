@@ -7,7 +7,7 @@ import calendar
 import os
 import json
 
-# -------- LOAD GOOGLE CREDENTIALS FROM ENV --------
+# -------- LOAD GOOGLE CREDENTIALS --------
 
 google_creds = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
 
@@ -25,7 +25,7 @@ gs_client = gspread.authorize(creds)
 sheet = gs_client.open("Spotify").sheet1
 
 
-# -------- CACHE + LOOKUP TABLES --------
+# -------- CACHE + LOOKUPS --------
 
 sheet_cache = []
 month_rows = {}
@@ -40,12 +40,10 @@ def refresh_sheet():
     month_rows = {}
     user_columns = {}
 
-    # Build month lookup
     for i, row in enumerate(sheet_cache):
         if row and row[0]:
             month_rows[row[0]] = i
 
-    # Build column lookup from spreadsheet header row
     header = sheet_cache[2]
 
     for i, cell in enumerate(header):
@@ -60,12 +58,11 @@ intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-# Your server ID
 GUILD_ID = 1481367910965579809
 guild = discord.Object(id=GUILD_ID)
 
 
-# -------- USER MAPPING --------
+# -------- USER MAP --------
 
 user_names = {
     641448694691921930: "Dylan",
@@ -113,7 +110,6 @@ async def debt(interaction: discord.Interaction, user: discord.Member | None = N
         user_id = user.id
 
     if user_id not in user_names:
-
         await interaction.response.send_message(
             "That user isn't registered in the spreadsheet."
         )
@@ -124,41 +120,44 @@ async def debt(interaction: discord.Interaction, user: discord.Member | None = N
     row = month_rows.get(get_current_month())
     column = user_columns.get(name)
 
-    if row is None or column is None:
-
-        await interaction.response.send_message(
-            "Could not find the necessary spreadsheet data."
-        )
-        return
-
     value = sheet_cache[row][column]
 
     try:
-        debt = float(value.replace("$", ""))
+        debt_value = float(value.replace("$", ""))
     except:
-        debt = 0
+        debt_value = 0
 
-    if debt > 0:
+    embed = discord.Embed(
+        title="Spotify Debt",
+        color=discord.Color.green()
+    )
 
-        await interaction.response.send_message(
-            f"{name}, your **{get_current_month()}** debt is **${debt:.2f}**"
+    if debt_value > 0:
+
+        embed.add_field(
+            name=name,
+            value=f"Debt for **{get_current_month()}**: `${debt_value:.2f}`",
+            inline=False
         )
 
     else:
 
-        future_month = find_future_debt(row, column)
+        future = find_future_debt(row, column)
 
-        if future_month:
-
-            await interaction.response.send_message(
-                f"{name}, you will not be in debt until **{future_month}**."
+        if future:
+            embed.add_field(
+                name=name,
+                value=f"You will not be in debt until **{future}**",
+                inline=False
             )
-
         else:
-
-            await interaction.response.send_message(
-                f"{name} will not be in debt in any listed future month."
+            embed.add_field(
+                name=name,
+                value="No future debt found in spreadsheet.",
+                inline=False
             )
+
+    await interaction.response.send_message(embed=embed)
 
 
 @tree.command(name="status", description="Show everyone's current debt", guild=guild)
@@ -166,14 +165,10 @@ async def status(interaction: discord.Interaction):
 
     row = month_rows.get(get_current_month())
 
-    if row is None:
-
-        await interaction.response.send_message(
-            "Current month not found in spreadsheet."
-        )
-        return
-
-    message = f"**Spotify Debt Status ({get_current_month()})**\n\n"
+    embed = discord.Embed(
+        title=f"Spotify Debt Status ({get_current_month()})",
+        color=discord.Color.blue()
+    )
 
     for name in user_columns:
 
@@ -186,11 +181,11 @@ async def status(interaction: discord.Interaction):
             debt = 0
 
         if debt > 0:
-            message += f"{name}: ${debt:.2f}\n"
+            embed.add_field(name=name, value=f"${debt:.2f}", inline=False)
         else:
-            message += f"{name}: credit\n"
+            embed.add_field(name=name, value="credit", inline=False)
 
-    await interaction.response.send_message(message)
+    await interaction.response.send_message(embed=embed)
 
 
 @tree.command(name="refresh", description="Reload spreadsheet cache", guild=guild)
@@ -198,7 +193,49 @@ async def refresh(interaction: discord.Interaction):
 
     refresh_sheet()
 
-    await interaction.response.send_message("Spreadsheet cache refreshed.")
+    await interaction.response.send_message(
+        "Spreadsheet cache refreshed.", ephemeral=True
+    )
+
+
+# -------- DEV COMMANDS --------
+
+@tree.command(name="sync", description="Force resync commands", guild=guild)
+async def sync(interaction: discord.Interaction):
+
+    if interaction.user.id != 614181100365021207:
+        await interaction.response.send_message(
+            "You can't use this command.", ephemeral=True
+        )
+        return
+
+    await tree.sync(guild=guild)
+
+    await interaction.response.send_message(
+        "Commands synced.", ephemeral=True
+    )
+
+
+@tree.command(name="debugsheet", description="Debug spreadsheet cache", guild=guild)
+async def debugsheet(interaction: discord.Interaction):
+
+    if interaction.user.id != 614181100365021207:
+        await interaction.response.send_message(
+            "You can't use this command.", ephemeral=True
+        )
+        return
+
+    msg = f"""
+Rows cached: {len(sheet_cache)}
+
+Months detected:
+{list(month_rows.keys())[:5]}
+
+User columns:
+{user_columns}
+"""
+
+    await interaction.response.send_message(msg, ephemeral=True)
 
 
 # -------- BOT STARTUP --------
@@ -206,7 +243,8 @@ async def refresh(interaction: discord.Interaction):
 @client.event
 async def on_ready():
 
-    # Sync commands instantly to your server
+    tree.clear_commands(guild=None)
+
     await tree.sync(guild=guild)
 
     refresh_sheet()
