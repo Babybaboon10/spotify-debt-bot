@@ -60,8 +60,12 @@ intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
+# Your server ID
+GUILD_ID = 1481367910965579809
+guild = discord.Object(id=GUILD_ID)
 
-# Discord ID → Spreadsheet Name
+
+# -------- USER MAPPING --------
 
 user_names = {
     641448694691921930: "Dylan",
@@ -99,7 +103,7 @@ def find_future_debt(start_row, column):
 
 # -------- COMMANDS --------
 
-@tree.command(name="debt", description="Check Spotify debt")
+@tree.command(name="debt", description="Check Spotify debt", guild=guild)
 @app_commands.describe(user="Optional user to check")
 async def debt(interaction: discord.Interaction, user: discord.Member | None = None):
 
@@ -157,7 +161,7 @@ async def debt(interaction: discord.Interaction, user: discord.Member | None = N
             )
 
 
-@tree.command(name="status", description="Show everyone's current debt")
+@tree.command(name="status", description="Show everyone's current debt", guild=guild)
 async def status(interaction: discord.Interaction):
 
     row = month_rows.get(get_current_month())
@@ -189,7 +193,7 @@ async def status(interaction: discord.Interaction):
     await interaction.response.send_message(message)
 
 
-@tree.command(name="refresh", description="Reload spreadsheet cache")
+@tree.command(name="refresh", description="Reload spreadsheet cache", guild=guild)
 async def refresh(interaction: discord.Interaction):
 
     refresh_sheet()
@@ -202,7 +206,8 @@ async def refresh(interaction: discord.Interaction):
 @client.event
 async def on_ready():
 
-    await tree.sync()
+    # Sync commands instantly to your server
+    await tree.sync(guild=guild)
 
     refresh_sheet()
 
