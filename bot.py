@@ -22,18 +22,36 @@ creds = Credentials.from_service_account_info(
 )
 
 gs_client = gspread.authorize(creds)
-
 sheet = gs_client.open("Spotify").sheet1
 
 
-# -------- CACHE --------
+# -------- CACHE + LOOKUP TABLES --------
 
 sheet_cache = []
+month_rows = {}
+user_columns = {}
 
 
 def refresh_sheet():
-    global sheet_cache
+    global sheet_cache, month_rows, user_columns
+
     sheet_cache = sheet.get_all_values()
+
+    month_rows = {}
+    user_columns = {}
+
+    # Build month lookup
+    for i, row in enumerate(sheet_cache):
+        if row and row[0]:
+            month_rows[row[0]] = i
+
+    # Build column lookup from spreadsheet header row
+    header = sheet_cache[2]
+
+    for i, cell in enumerate(header):
+        name = cell.strip()
+        if name:
+            user_columns[name] = i + 1
 
 
 # -------- DISCORD SETUP --------
@@ -43,7 +61,8 @@ client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 
-# Discord ID → spreadsheet name
+# Discord ID → Spreadsheet Name
+
 user_names = {
     641448694691921930: "Dylan",
     521798405295439873: "Mason",
@@ -55,30 +74,10 @@ user_names = {
 
 # -------- HELPERS --------
 
-def find_debt_column(name):
-
-    header = sheet_cache[2]  # row 3 in spreadsheet
-
-    for i, cell in enumerate(header):
-
-        if cell.strip().lower() == name.lower():
-            return i + 1
-
-    return None
-
-
-def find_current_month_row():
-
+def get_current_month():
     now = datetime.now()
     month = calendar.month_abbr[now.month]
-    current_month = f"{month} {now.year}"
-
-    for i, row in enumerate(sheet_cache):
-
-        if row[0] == current_month:
-            return i
-
-    return None
+    return f"{month} {now.year}"
 
 
 def find_future_debt(start_row, column):
@@ -118,21 +117,13 @@ async def debt(interaction: discord.Interaction, user: discord.Member | None = N
 
     name = user_names[user_id]
 
-    row = find_current_month_row()
+    row = month_rows.get(get_current_month())
+    column = user_columns.get(name)
 
-    if row is None:
-
-        await interaction.response.send_message(
-            "Current month not found in spreadsheet."
-        )
-        return
-
-    column = find_debt_column(name)
-
-    if column is None:
+    if row is None or column is None:
 
         await interaction.response.send_message(
-            f"Could not find column for {name}."
+            "Could not find the necessary spreadsheet data."
         )
         return
 
@@ -145,12 +136,8 @@ async def debt(interaction: discord.Interaction, user: discord.Member | None = N
 
     if debt > 0:
 
-        now = datetime.now()
-        month = calendar.month_abbr[now.month]
-        current_month = f"{month} {now.year}"
-
         await interaction.response.send_message(
-            f"{name}, your **{current_month}** debt is **${debt:.2f}**"
+            f"{name}, your **{get_current_month()}** debt is **${debt:.2f}**"
         )
 
     else:
@@ -168,6 +155,38 @@ async def debt(interaction: discord.Interaction, user: discord.Member | None = N
             await interaction.response.send_message(
                 f"{name} will not be in debt in any listed future month."
             )
+
+
+@tree.command(name="status", description="Show everyone's current debt")
+async def status(interaction: discord.Interaction):
+
+    row = month_rows.get(get_current_month())
+
+    if row is None:
+
+        await interaction.response.send_message(
+            "Current month not found in spreadsheet."
+        )
+        return
+
+    message = f"**Spotify Debt Status ({get_current_month()})**\n\n"
+
+    for name in user_columns:
+
+        column = user_columns[name]
+        value = sheet_cache[row][column]
+
+        try:
+            debt = float(value.replace("$", ""))
+        except:
+            debt = 0
+
+        if debt > 0:
+            message += f"{name}: ${debt:.2f}\n"
+        else:
+            message += f"{name}: credit\n"
+
+    await interaction.response.send_message(message)
 
 
 @tree.command(name="refresh", description="Reload spreadsheet cache")
