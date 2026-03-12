@@ -165,10 +165,49 @@ async def status(interaction: discord.Interaction):
 
     row = month_rows.get(get_current_month())
 
+    debt_list = []
+
+    for name in user_columns:
+
+        column = user_columns[name]
+        value = sheet_cache[row][column]
+
+        try:
+            debt = float(value.replace("$", ""))
+        except:
+            debt = 0
+
+        debt_list.append((name, debt))
+
+    # Sort most in debt → most in credit
+    debt_list.sort(key=lambda x: x[1], reverse=True)
+
     embed = discord.Embed(
         title=f"Spotify Debt Status ({get_current_month()})",
         color=discord.Color.blue()
     )
+
+    for name, debt in debt_list:
+
+        if debt > 0:
+            embed.add_field(name=name, value=f"${debt:.2f}", inline=False)
+        else:
+            embed.add_field(name=name, value="credit", inline=False)
+
+    await interaction.response.send_message(embed=embed)
+
+
+@tree.command(name="whoisindebt", description="Show people currently in debt", guild=guild)
+async def whoisindebt(interaction: discord.Interaction):
+
+    row = month_rows.get(get_current_month())
+
+    embed = discord.Embed(
+        title=f"People Currently in Debt ({get_current_month()})",
+        color=discord.Color.red()
+    )
+
+    anyone = False
 
     for name in user_columns:
 
@@ -182,8 +221,50 @@ async def status(interaction: discord.Interaction):
 
         if debt > 0:
             embed.add_field(name=name, value=f"${debt:.2f}", inline=False)
-        else:
-            embed.add_field(name=name, value="credit", inline=False)
+            anyone = True
+
+    if not anyone:
+        embed.description = "Nobody currently owes anything 🎉"
+
+    await interaction.response.send_message(embed=embed)
+
+
+@tree.command(name="nextdebt", description="Show when people with credit will owe again", guild=guild)
+async def nextdebt(interaction: discord.Interaction):
+
+    row = month_rows.get(get_current_month())
+
+    embed = discord.Embed(
+        title="Next Debt Forecast",
+        color=discord.Color.orange()
+    )
+
+    for name in user_columns:
+
+        column = user_columns[name]
+        value = sheet_cache[row][column]
+
+        try:
+            debt = float(value.replace("$", ""))
+        except:
+            debt = 0
+
+        if debt <= 0:
+
+            future = find_future_debt(row, column)
+
+            if future:
+                embed.add_field(
+                    name=name,
+                    value=f"{future}",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name=name,
+                    value="No future debt found",
+                    inline=False
+                )
 
     await interaction.response.send_message(embed=embed)
 
@@ -200,7 +281,7 @@ async def refresh(interaction: discord.Interaction):
 
 # -------- DEV COMMANDS --------
 
-@tree.command(name="sync", description="Force resync commands", guild=guild)
+@tree.command(name="sync", description="Force command resync", guild=guild)
 async def sync(interaction: discord.Interaction):
 
     if interaction.user.id != 614181100365021207:
@@ -209,10 +290,12 @@ async def sync(interaction: discord.Interaction):
         )
         return
 
+    tree.clear_commands(guild=None)
+
     await tree.sync(guild=guild)
 
     await interaction.response.send_message(
-        "Commands synced.", ephemeral=True
+        "Commands cleared and resynced.", ephemeral=True
     )
 
 
