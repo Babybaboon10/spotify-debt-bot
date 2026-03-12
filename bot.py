@@ -160,7 +160,7 @@ async def debt(interaction: discord.Interaction, user: discord.Member | None = N
     await interaction.response.send_message(embed=embed)
 
 
-@tree.command(name="status", description="Show everyone's current debt", guild=guild)
+@tree.command(name="status", description="Show everyone's current standing", guild=guild)
 async def status(interaction: discord.Interaction):
 
     row = month_rows.get(get_current_month())
@@ -333,3 +333,4 @@ async def on_ready():
 
 
 client.run(os.getenv("DISCORD_TOKEN"))
+
