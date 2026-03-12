@@ -179,7 +179,6 @@ async def status(interaction: discord.Interaction):
 
         debt_list.append((name, debt))
 
-    # Sort most in debt → most in credit
     debt_list.sort(key=lambda x: x[1], reverse=True)
 
     embed = discord.Embed(
@@ -254,17 +253,9 @@ async def nextdebt(interaction: discord.Interaction):
             future = find_future_debt(row, column)
 
             if future:
-                embed.add_field(
-                    name=name,
-                    value=f"{future}",
-                    inline=False
-                )
+                embed.add_field(name=name, value=future, inline=False)
             else:
-                embed.add_field(
-                    name=name,
-                    value="No future debt found",
-                    inline=False
-                )
+                embed.add_field(name=name, value="No future debt found", inline=False)
 
     await interaction.response.send_message(embed=embed)
 
@@ -290,12 +281,15 @@ async def sync(interaction: discord.Interaction):
         )
         return
 
+    # wipe global commands from Discord API
     tree.clear_commands(guild=None)
+    await tree.sync()
 
+    # rebuild guild commands
     await tree.sync(guild=guild)
 
     await interaction.response.send_message(
-        "Commands cleared and resynced.", ephemeral=True
+        "Global commands cleared and guild commands rebuilt.", ephemeral=True
     )
 
 
@@ -326,8 +320,11 @@ User columns:
 @client.event
 async def on_ready():
 
+    # send empty array to global command API
     tree.clear_commands(guild=None)
+    await tree.sync()
 
+    # rebuild guild commands
     await tree.sync(guild=guild)
 
     refresh_sheet()
