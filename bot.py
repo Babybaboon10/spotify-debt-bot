@@ -1,11 +1,19 @@
 import discord
 from discord import app_commands
+from discord.ext import tasks
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import calendar
 import os
 import json
+import time
+from zoneinfo import ZoneInfo
+
+# -------- ENV VARIABLES --------
+
+SPREADSHEET_URL = os.getenv("SPREADSHEET_URL")
+REMINDER_CHANNEL_ID = 1481466539591864320
 
 # -------- LOAD GOOGLE CREDENTIALS --------
 
@@ -30,7 +38,6 @@ sheet = gs_client.open("Spotify").sheet1
 sheet_cache = []
 month_rows = {}
 user_columns = {}
-
 
 def refresh_sheet():
     global sheet_cache, month_rows, user_columns
@@ -75,16 +82,17 @@ user_names = {
 
 # -------- HELPERS --------
 
+def get_now_est():
+    return datetime.now(ZoneInfo("America/New_York"))
+
 def get_current_month():
-    now = datetime.now()
+    now = get_now_est()
     month = calendar.month_abbr[now.month]
     return f"{month} {now.year}"
-
 
 def find_future_debt(start_row, column):
 
     for r in range(start_row + 1, len(sheet_cache)):
-
         value = sheet_cache[r][column]
 
         try:
@@ -98,21 +106,21 @@ def find_future_debt(start_row, column):
     return None
 
 
+# -------- PAYMENT COOLDOWN --------
+
+last_payment_time = {}
+
+
 # -------- COMMANDS --------
 
 @tree.command(name="debt", description="Check Spotify debt", guild=guild)
 @app_commands.describe(user="Optional user to check")
 async def debt(interaction: discord.Interaction, user: discord.Member | None = None):
 
-    if user is None:
-        user_id = interaction.user.id
-    else:
-        user_id = user.id
+    user_id = interaction.user.id if user is None else user.id
 
     if user_id not in user_names:
-        await interaction.response.send_message(
-            "That user isn't registered in the spreadsheet."
-        )
+        await interaction.response.send_message("User not registered.")
         return
 
     name = user_names[user_id]
@@ -127,40 +135,22 @@ async def debt(interaction: discord.Interaction, user: discord.Member | None = N
     except:
         debt_value = 0
 
-    embed = discord.Embed(
-        title="Spotify Debt",
-        color=discord.Color.green()
-    )
+    embed = discord.Embed(title="Spotify Debt", color=discord.Color.green())
 
     if debt_value > 0:
-
+        embed.add_field(name=name, value=f"${debt_value:.2f}", inline=False)
+    else:
+        future = find_future_debt(row, column)
         embed.add_field(
             name=name,
-            value=f"Debt for **{get_current_month()}**: `${debt_value:.2f}`",
+            value=f"No debt until {future}" if future else "No future debt",
             inline=False
         )
-
-    else:
-
-        future = find_future_debt(row, column)
-
-        if future:
-            embed.add_field(
-                name=name,
-                value=f"You will not be in debt until **{future}**",
-                inline=False
-            )
-        else:
-            embed.add_field(
-                name=name,
-                value="No future debt found in spreadsheet.",
-                inline=False
-            )
 
     await interaction.response.send_message(embed=embed)
 
 
-@tree.command(name="status", description="Show everyone's current standing", guild=guild)
+@tree.command(name="status", description="Show everyone's current debt", guild=guild)
 async def status(interaction: discord.Interaction):
 
     row = month_rows.get(get_current_month())
@@ -168,7 +158,6 @@ async def status(interaction: discord.Interaction):
     debt_list = []
 
     for name in user_columns:
-
         column = user_columns[name]
         value = sheet_cache[row][column]
 
@@ -187,11 +176,11 @@ async def status(interaction: discord.Interaction):
     )
 
     for name, debt in debt_list:
-
-        if debt > 0:
-            embed.add_field(name=name, value=f"${debt:.2f}", inline=False)
-        else:
-            embed.add_field(name=name, value="credit", inline=False)
+        embed.add_field(
+            name=name,
+            value=f"${debt:.2f}" if debt > 0 else "credit",
+            inline=False
+        )
 
     await interaction.response.send_message(embed=embed)
 
@@ -202,14 +191,11 @@ async def whoisindebt(interaction: discord.Interaction):
     row = month_rows.get(get_current_month())
 
     embed = discord.Embed(
-        title=f"People Currently in Debt ({get_current_month()})",
+        title="People in Debt",
         color=discord.Color.red()
     )
 
-    anyone = False
-
     for name in user_columns:
-
         column = user_columns[name]
         value = sheet_cache[row][column]
 
@@ -220,26 +206,18 @@ async def whoisindebt(interaction: discord.Interaction):
 
         if debt > 0:
             embed.add_field(name=name, value=f"${debt:.2f}", inline=False)
-            anyone = True
-
-    if not anyone:
-        embed.description = "Nobody currently owes anything 🎉"
 
     await interaction.response.send_message(embed=embed)
 
 
-@tree.command(name="nextdebt", description="Show when people with credit will owe again", guild=guild)
+@tree.command(name="nextdebt", description="Future debt forecast", guild=guild)
 async def nextdebt(interaction: discord.Interaction):
 
     row = month_rows.get(get_current_month())
 
-    embed = discord.Embed(
-        title="Next Debt Forecast",
-        color=discord.Color.orange()
-    )
+    embed = discord.Embed(title="Next Debt Forecast", color=discord.Color.orange())
 
     for name in user_columns:
-
         column = user_columns[name]
         value = sheet_cache[row][column]
 
@@ -249,88 +227,134 @@ async def nextdebt(interaction: discord.Interaction):
             debt = 0
 
         if debt <= 0:
-
             future = find_future_debt(row, column)
-
-            if future:
-                embed.add_field(name=name, value=future, inline=False)
-            else:
-                embed.add_field(name=name, value="No future debt found", inline=False)
+            embed.add_field(name=name, value=future or "No future debt", inline=False)
 
     await interaction.response.send_message(embed=embed)
 
 
-@tree.command(name="refresh", description="Reload spreadsheet cache", guild=guild)
-async def refresh(interaction: discord.Interaction):
+@tree.command(name="paid", description="Record payment", guild=guild)
+async def paid(interaction: discord.Interaction, user: discord.Member, amount: float):
+
+    now = time.time()
+
+    if interaction.user.id in last_payment_time:
+        if now - last_payment_time[interaction.user.id] < 5:
+            await interaction.response.send_message(
+                "Too fast — possible duplicate.",
+                ephemeral=True
+            )
+            return
+
+    last_payment_time[interaction.user.id] = now
+
+    user_id = user.id
+
+    if user_id not in user_names:
+        await interaction.response.send_message("User not registered.", ephemeral=True)
+        return
+
+    name = user_names[user_id]
+
+    row = month_rows.get(get_current_month())
+    debt_col = user_columns.get(name)
+    paid_col = debt_col - 1
+
+    try:
+        current = float(sheet_cache[row][paid_col])
+    except:
+        current = 0
+
+    new_total = current + amount
+
+    sheet.update_cell(row + 1, paid_col + 1, new_total)
 
     refresh_sheet()
 
     await interaction.response.send_message(
-        "Spreadsheet cache refreshed.", ephemeral=True
+        f"{name} paid ${amount:.2f} (total: ${new_total:.2f})"
     )
+
+
+@tree.command(name="link", description="Get spreadsheet link", guild=guild)
+async def link(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        SPREADSHEET_URL,
+        ephemeral=True
+    )
+
+
+@tree.command(name="refresh", description="Reload cache", guild=guild)
+async def refresh(interaction: discord.Interaction):
+    refresh_sheet()
+    await interaction.response.send_message("Cache refreshed.", ephemeral=True)
+
+
+# -------- REMINDER TASK --------
+
+@tasks.loop(minutes=10)
+async def monthly_reminder():
+
+    now = get_now_est()
+
+    if now.day == 3 and now.hour == 10:
+
+        row = month_rows.get(get_current_month())
+        if row is None:
+            return
+
+        people = []
+
+        for user_id, name in user_names.items():
+            col = user_columns.get(name)
+            try:
+                debt = float(sheet_cache[row][col])
+            except:
+                debt = 0
+
+            if debt > 0:
+                people.append(user_id)
+
+        if not people:
+            return
+
+        channel = client.get_channel(REMINDER_CHANNEL_ID)
+
+        if channel:
+            mentions = " ".join(f"<@{uid}>" for uid in people)
+            await channel.send(f"{mentions}\nPlease settle your Spotify balances.")
 
 
 # -------- DEV COMMANDS --------
 
-@tree.command(name="sync", description="Force command resync", guild=guild)
+@tree.command(name="sync", description="Resync commands", guild=guild)
 async def sync(interaction: discord.Interaction):
 
     if interaction.user.id != 614181100365021207:
-        await interaction.response.send_message(
-            "You can't use this command.", ephemeral=True
-        )
+        await interaction.response.send_message("Nope.", ephemeral=True)
         return
 
-    # wipe global commands from Discord API
     tree.clear_commands(guild=None)
     await tree.sync()
-
-    # rebuild guild commands
     await tree.sync(guild=guild)
 
-    await interaction.response.send_message(
-        "Global commands cleared and guild commands rebuilt.", ephemeral=True
-    )
+    await interaction.response.send_message("Synced.", ephemeral=True)
 
 
-@tree.command(name="debugsheet", description="Debug spreadsheet cache", guild=guild)
-async def debugsheet(interaction: discord.Interaction):
-
-    if interaction.user.id != 614181100365021207:
-        await interaction.response.send_message(
-            "You can't use this command.", ephemeral=True
-        )
-        return
-
-    msg = f"""
-Rows cached: {len(sheet_cache)}
-
-Months detected:
-{list(month_rows.keys())[:5]}
-
-User columns:
-{user_columns}
-"""
-
-    await interaction.response.send_message(msg, ephemeral=True)
-
-
-# -------- BOT STARTUP --------
+# -------- STARTUP --------
 
 @client.event
 async def on_ready():
 
-    # send empty array to global command API
     tree.clear_commands(guild=None)
     await tree.sync()
-
-    # rebuild guild commands
     await tree.sync(guild=guild)
 
     refresh_sheet()
+
+    monthly_reminder.start()
 
     print(f"Logged in as {client.user}")
 
 
 client.run(os.getenv("DISCORD_TOKEN"))
-
