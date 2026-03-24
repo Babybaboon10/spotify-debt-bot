@@ -91,18 +91,14 @@ def get_current_month():
     return f"{month} {now.year}"
 
 def find_future_debt(start_row, column):
-
     for r in range(start_row + 1, len(sheet_cache)):
         value = sheet_cache[r][column]
-
         try:
             debt = float(value.replace("$", ""))
         except:
             continue
-
         if debt > 0:
             return sheet_cache[r][0]
-
     return None
 
 
@@ -154,7 +150,6 @@ async def debt(interaction: discord.Interaction, user: discord.Member | None = N
 async def status(interaction: discord.Interaction):
 
     row = month_rows.get(get_current_month())
-
     debt_list = []
 
     for name in user_columns:
@@ -190,10 +185,7 @@ async def whoisindebt(interaction: discord.Interaction):
 
     row = month_rows.get(get_current_month())
 
-    embed = discord.Embed(
-        title="People in Debt",
-        color=discord.Color.red()
-    )
+    embed = discord.Embed(title="People in Debt", color=discord.Color.red())
 
     for name in user_columns:
         column = user_columns[name]
@@ -260,10 +252,12 @@ async def paid(interaction: discord.Interaction, user: discord.Member, amount: f
     debt_col = user_columns.get(name)
     paid_col = debt_col - 1
 
+    current_value = sheet_cache[row][paid_col]
+
     try:
-        current = float(sheet_cache[row][paid_col])
+        current = float(current_value.replace("$", "").strip())
     except:
-        current = 0
+        current = 0.0
 
     new_total = current + amount
 
@@ -278,10 +272,7 @@ async def paid(interaction: discord.Interaction, user: discord.Member, amount: f
 
 @tree.command(name="link", description="Get spreadsheet link", guild=guild)
 async def link(interaction: discord.Interaction):
-    await interaction.response.send_message(
-        SPREADSHEET_URL,
-        ephemeral=True
-    )
+    await interaction.response.send_message(SPREADSHEET_URL, ephemeral=True)
 
 
 @tree.command(name="refresh", description="Reload cache", guild=guild)
@@ -303,29 +294,44 @@ async def monthly_reminder():
         if row is None:
             return
 
-        people = []
+        people_in_debt = []
 
         for user_id, name in user_names.items():
-            col = user_columns.get(name)
+
+            debt_col = user_columns.get(name)
+            paid_col = debt_col - 1
+
+            # Fill empty paid cells with 0
+            paid_value = sheet_cache[row][paid_col]
+            if not paid_value or paid_value.strip() == "":
+                sheet.update_cell(row + 1, paid_col + 1, 0)
+
+            # Check debt
+            value = sheet_cache[row][debt_col]
+
             try:
-                debt = float(sheet_cache[row][col])
+                debt = float(value.replace("$", ""))
             except:
                 debt = 0
 
             if debt > 0:
-                people.append(user_id)
+                people_in_debt.append(user_id)
 
-        if not people:
+        refresh_sheet()
+
+        if not people_in_debt:
             return
 
         channel = client.get_channel(REMINDER_CHANNEL_ID)
 
         if channel:
-            mentions = " ".join(f"<@{uid}>" for uid in people)
-            await channel.send(f"{mentions}\nPlease settle your Spotify balances.")
+            mentions = " ".join(f"<@{uid}>" for uid in people_in_debt)
+            await channel.send(
+                f"{mentions}\nReminder: You currently owe money for Spotify — please settle up!"
+            )
 
 
-# -------- DEV COMMANDS --------
+# -------- DEV COMMAND --------
 
 @tree.command(name="sync", description="Resync commands", guild=guild)
 async def sync(interaction: discord.Interaction):
