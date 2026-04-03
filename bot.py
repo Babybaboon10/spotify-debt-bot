@@ -283,7 +283,7 @@ async def refresh(interaction: discord.Interaction):
 
 # -------- REMINDER TASK --------
 
-@tasks.loop(minutes=10)
+@tasks.loop(minutes=30)
 async def monthly_reminder():
 
     now = get_now_est()
